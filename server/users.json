@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1,
+    "name": "Event Admin",
+    "email": "admin@panipat.local",
+    "password": "admin123",
+    "role": "admin",
+    "teamId": null
+  },
+  {
+    "id": 2,
+    "name": "Pratham",
+    "email": "pratham@ss.smjv",
+    "password": "pratham123",
+    "role": "admin",
+    "teamId": null
+  },
+  {
+    "id": 3,
+    "name": "Samyak",
+    "email": "samyak@ss.smjv",
+    "password": "samyak123",
+    "role": "admin",
+    "teamId": null
+  },
+  {
+    "id": 4,
+    "name": "Megh",
+    "email": "megh@ss.smjv",
+    "password": "megh123",
+    "role": "admin",
+    "teamId": null
+  },
+  {
+    "id": 5,
+    "name": "dev",
+    "email": "dev@example.com",
+    "password": "dev123",
+    "role": "player",
+    "teamId": "shadow_havoc"
+  }
+]
