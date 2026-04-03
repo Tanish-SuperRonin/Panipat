@@ -166,17 +166,29 @@ function App() {
       finalizedSports.map((entry) => [entry.game, entry])
     );
 
-    return CATEGORY_PAGES.filter((page) => page.id !== "home").reduce((accumulator, page) => {
-      const sports = sportStandingsEntries
-        .map(([game, rows]) => ({
-          game,
-          rows,
-          category: sportMeta[game]?.category || "Outdoor Games",
-          subcategory: sportMeta[game]?.subcategory || "",
-          finalized: finalizedByGame[game] || null,
-          fixtures: fixtures.filter((fixture) => fixture.game === game)
-        }))
-        .filter((sport) => sport.category === page.id);
+    // Build a map of all games from standings
+    const standingsMap = Object.fromEntries(sportStandingsEntries);
+
+    // All games from the catalog (ensures games like GC always appear)
+    const allCatalogGames = SPORT_CATALOG.flatMap((entry) =>
+      entry.games.map((game) => ({
+        game,
+        category: entry.category,
+        subcategory: entry.subcategory
+      }))
+    );
+
+    return CATEGORY_PAGES.filter((page) => page.id !== "home" && page.id !== "fixtures").reduce((accumulator, page) => {
+      const sports = allCatalogGames
+        .filter((entry) => entry.category === page.id)
+        .map((entry) => ({
+          game: entry.game,
+          rows: standingsMap[entry.game] || [],
+          category: entry.category,
+          subcategory: entry.subcategory,
+          finalized: finalizedByGame[entry.game] || null,
+          fixtures: fixtures.filter((fixture) => fixture.game === entry.game)
+        }));
 
       accumulator[page.id] = sports.reduce((groups, sport) => {
         const key = sport.subcategory || "All Games";
@@ -186,7 +198,7 @@ function App() {
       }, {});
       return accumulator;
     }, {});
-  }, [finalizedSports, fixtures, sportMeta, sportStandingsEntries]);
+  }, [finalizedSports, fixtures, sportStandingsEntries]);
 
   const myFixtures = useMemo(() => {
     if (!myTeam) return fixtures;

@@ -669,9 +669,21 @@ app.post("/api/sports/finalize", requireAdmin, async (req, res) => {
     const teamIds = [firstTeamId, secondTeamId, thirdTeamId];
     const uniqueIds = new Set(teamIds);
 
-    const sportData = await getSportStandings(safeGame);
-    if (!safeGame || !sportData) {
+    const sportDef = SPORT_DEFINITION_MAP[safeGame];
+    if (!safeGame || !sportDef) {
       return res.status(400).json({ error: "Choose a valid sport to finalize" });
+    }
+
+    // Auto-create standings if they don't exist (for time-trial games like GC)
+    let sportData = await getSportStandings(safeGame);
+    if (!sportData) {
+      sportData = {
+        game: safeGame,
+        category: sportDef.category,
+        subcategory: sportDef.subcategory,
+        rows: TEAMS.map((t) => createEmptyStandingRow(t.id))
+      };
+      await setSportStandings(safeGame, sportData);
     }
 
     // Check pending fixtures
