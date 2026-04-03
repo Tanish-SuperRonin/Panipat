@@ -254,6 +254,7 @@ function App() {
     socket.on("disconnect", () => setIsConnected(false));
     socket.on("bootstrap", (data) => {
       if (!data) return;
+      setGlobalError("");
       if (Array.isArray(data.teams) && data.teams.length) setTeams(data.teams);
       const normalizedStandings = normalizeStandingsPayload(data.standings);
       setOverallStandings(normalizedStandings.overall);
