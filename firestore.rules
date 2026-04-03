@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow all reads and writes — auth is handled by the Express server,
+    // not by Firebase Auth. This is a college event app with dummy auth.
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

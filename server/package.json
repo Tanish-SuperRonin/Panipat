@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "seed": "node seed.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "firebase": "^11.6.0",
     "socket.io": "^4.8.1"
   }
 }

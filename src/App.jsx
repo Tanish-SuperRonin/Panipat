@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import tournamentLogo from "../logo.png";
 
@@ -80,6 +80,7 @@ const defaultFixtureForm = createFixtureForm();
 
 const CATEGORY_PAGES = [
   { id: "home", label: "Home" },
+  { id: "fixtures", label: "Fixtures" },
   { id: "LAN Games", label: "LAN Games" },
   { id: "Indoor Games", label: "Indoor Games" },
   { id: "Outdoor Games", label: "Outdoor Games" }
@@ -140,6 +141,9 @@ function App() {
   const [chatText, setChatText] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [globalError, setGlobalError] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isStreamActive, setIsStreamActive] = useState(false);
+  const [showLoginPage, setShowLoginPage] = useState(false);
   const socketRef = useRef(null);
 
   const role = user?.role || null;
@@ -259,6 +263,7 @@ function App() {
       if (Array.isArray(data.fixtures)) setFixtures(data.fixtures);
       if (Array.isArray(data.messages)) setChatMessages(data.messages);
       if (Array.isArray(data.scoreUpdates)) setScoreUpdates(data.scoreUpdates);
+      if (data.streamActive) setIsStreamActive(true);
     });
     socket.on("chat:message", (message) => {
       setChatMessages((prev) => [...prev, message].slice(-200));
@@ -279,6 +284,9 @@ function App() {
     socket.on("score:update", (update) => {
       setScoreUpdates((prev) => [update, ...prev].slice(0, 200));
     });
+
+    socket.on("stream:started", () => setIsStreamActive(true));
+    socket.on("stream:stopped", () => setIsStreamActive(false));
 
     return () => {
       socket.disconnect();
@@ -358,6 +366,7 @@ function App() {
     setUser(nextUser);
     setAuthError("");
     setGlobalError("");
+    setShowLoginPage(false);
   }
 
   async function handleLogin(e) {
@@ -435,6 +444,22 @@ function App() {
     }
   }
 
+  async function handleDeleteFixture(fixtureId) {
+    try {
+      const res = await fetch(`/api/fixtures/${fixtureId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Delete failed");
+      }
+      setGlobalError("");
+    } catch (error) {
+      setGlobalError(error.message);
+    }
+  }
+
   async function handleFinalizeSport(payload) {
     try {
       await postWithAuth("/api/sports/finalize", payload);
@@ -465,14 +490,14 @@ function App() {
       <div className="auth-shell">
         <div className="auth-card">
           <p className="eyebrow">Panipat Championship</p>
-          <h1>Restoring your dashboard</h1>
-          <p className="muted">Checking your session and loading the live event data.</p>
+          <h1>Loading event data...</h1>
+          <p className="muted">Connecting to the live tournament.</p>
         </div>
       </div>
     );
   }
 
-  if (!user) {
+  if (showLoginPage) {
     return (
       <AuthScreen
         authMode={authMode}
@@ -485,6 +510,7 @@ function App() {
         onLogin={handleLogin}
         onSignup={handleSignup}
         authError={authError}
+        onBack={() => setShowLoginPage(false)}
       />
     );
   }
@@ -502,11 +528,20 @@ function App() {
 
         <div className="top-bar-actions">
           <span className={`pill ${isConnected ? "ok" : "warn"}`}>
-            {isConnected ? "Live" : "Offline"}
+            {isConnected ? "Online" : "Offline"}
           </span>
-          <button type="button" className="btn btn-ghost small" onClick={handleLogout}>
-            Logout
-          </button>
+          {user ? (
+            <>
+              <span className="pill">{user.role?.toUpperCase()}: {user.name}</span>
+              <button type="button" className="btn btn-ghost small" onClick={handleLogout}>
+                Logout
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn-ghost small" onClick={() => setShowLoginPage(true)}>
+              Admin / Captain Login
+            </button>
+          )}
         </div>
       </header>
 
@@ -527,6 +562,10 @@ function App() {
 
       <main className="layout">
         <section className="primary-panel">
+          {isStreamActive && !isStreaming && (
+            <LiveStreamViewer socketRef={socketRef} />
+          )}
+
           <Dashboard
             activePage={activePage}
             overallStandings={overallStandings}
@@ -537,9 +576,21 @@ function App() {
             teams={teams}
             role={role}
             myTeam={myTeam}
+            authToken={authToken}
             onResolveFixture={handleResolveFixture}
             onFinalizeSport={handleFinalizeSport}
+            onDeleteFixture={handleDeleteFixture}
           />
+
+          {role === ROLES.ADMIN && (
+            <LiveStreamAdmin
+              socketRef={socketRef}
+              authToken={authToken}
+              isStreaming={isStreaming}
+              setIsStreaming={setIsStreaming}
+              setIsStreamActive={setIsStreamActive}
+            />
+          )}
 
           {role === ROLES.ADMIN && (
             <AdminFixtureForm
@@ -579,11 +630,17 @@ function AuthScreen({
   teams,
   onLogin,
   onSignup,
-  authError
+  authError,
+  onBack
 }) {
   return (
     <div className="auth-shell">
       <div className="auth-card auth-copy">
+        {onBack && (
+          <button type="button" className="btn btn-ghost small" style={{ marginBottom: 14 }} onClick={onBack}>
+            &larr; Back to Scoreboard
+          </button>
+        )}
         <div className="auth-brand">
           <img src={tournamentLogo} alt="Panipat tournament logo" className="auth-logo" />
         </div>
@@ -715,6 +772,311 @@ function AuthScreen({
   );
 }
 
+/* ── Admin: Team Assignments View ─────────────────────────── */
+
+function AdminAssignmentsView({ teams, authToken }) {
+  const [data, setData] = useState(null);
+  const [viewMode, setViewMode] = useState("by-game");
+  const headers = { Authorization: `Bearer ${authToken}` };
+
+  useEffect(() => {
+    async function load() {
+      const results = {};
+      for (const team of teams) {
+        try {
+          const [rosterRes, assignRes] = await Promise.all([
+            fetch(`/api/teams/${team.id}/roster`, { headers }),
+            fetch(`/api/teams/${team.id}/assignments`, { headers })
+          ]);
+          const roster = rosterRes.ok ? await rosterRes.json() : [];
+          const assignments = assignRes.ok ? await assignRes.json() : {};
+          results[team.id] = {
+            team,
+            players: roster.filter((u) => u.role === "player"),
+            assignments
+          };
+        } catch {}
+      }
+      setData(results);
+    }
+    load();
+  }, [teams, authToken]);
+
+  if (!data) return <div className="card" style={{ marginTop: 16 }}><p className="muted">Loading team assignments...</p></div>;
+
+  const allGames = SPORT_CATALOG.flatMap((e) => e.games);
+
+  // Build game → [{team, player}] map
+  const gameMap = {};
+  allGames.forEach((game) => { gameMap[game] = []; });
+  Object.values(data).forEach(({ team, players, assignments }) => {
+    players.forEach((player) => {
+      const playerGames = assignments[player.id] || [];
+      playerGames.forEach((game) => {
+        if (gameMap[game]) gameMap[game].push({ team: team.name, player: player.name });
+      });
+    });
+  });
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="card-header">
+        <h3>Team Assignments Overview</h3>
+        <p className="muted">Which players from each team are assigned to each game.</p>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        <button type="button" className={`btn ${viewMode === "by-game" ? "primary" : "btn-ghost"} small`}
+          onClick={() => setViewMode("by-game")}>By Game</button>
+        <button type="button" className={`btn ${viewMode === "by-team" ? "primary" : "btn-ghost"} small`}
+          onClick={() => setViewMode("by-team")}>By Team</button>
+      </div>
+
+      {viewMode === "by-game" ? (
+        <div className="admin-assign-grid">
+          {SPORT_CATALOG.map((entry) => (
+            <div key={entry.category + entry.subcategory} className="admin-assign-category">
+              <h4 className="section-title">
+                {entry.category}{entry.subcategory ? ` — ${entry.subcategory}` : ""}
+              </h4>
+              {entry.games.map((game) => (
+                <div key={game} className="admin-assign-game">
+                  <div className="admin-assign-game-name">{game}</div>
+                  <div className="admin-assign-players">
+                    {gameMap[game].length === 0 ? (
+                      <span className="muted small">No players assigned</span>
+                    ) : (
+                      gameMap[game].map((entry, i) => (
+                        <span key={i} className="admin-assign-tag">
+                          <span className="admin-assign-player-name">{entry.player}</span>
+                          <span className="admin-assign-team-name">{entry.team}</span>
+                        </span>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="admin-assign-grid">
+          {teams.map((team) => {
+            const teamData = data[team.id];
+            if (!teamData || teamData.players.length === 0) return (
+              <div key={team.id} className="admin-assign-category">
+                <h4 className="section-title">{team.name}</h4>
+                <p className="muted small">No players registered</p>
+              </div>
+            );
+            return (
+              <div key={team.id} className="admin-assign-category">
+                <h4 className="section-title">{team.name}</h4>
+                {teamData.players.map((player) => {
+                  const games = teamData.assignments[player.id] || [];
+                  return (
+                    <div key={player.id} className="admin-assign-game">
+                      <div className="admin-assign-game-name">{player.name}</div>
+                      <div className="admin-assign-players">
+                        {games.length === 0 ? (
+                          <span className="muted small">No games assigned</span>
+                        ) : (
+                          games.map((g) => (
+                            <span key={g} className="admin-assign-tag compact">{g}</span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Captain Roster Panel ────────────────────────────────── */
+
+const CATEGORIES = ["LAN Games", "Indoor Games", "Outdoor Games"];
+const GAMES_BY_CATEGORY = Object.fromEntries(
+  CATEGORIES.map((cat) => [
+    cat,
+    SPORT_CATALOG.filter((e) => e.category === cat).flatMap((e) => e.games)
+  ])
+);
+
+function CaptainRosterPanel({ teamId, teamName, authToken }) {
+  const [roster, setRoster] = useState([]);
+  const [assignments, setAssignments] = useState({});
+  const [newPlayer, setNewPlayer] = useState({ name: "" });
+  const [rosterError, setRosterError] = useState("");
+  const [rosterLoading, setRosterLoading] = useState(true);
+
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` };
+
+  const loadData = useCallback(async () => {
+    try {
+      const [rosterRes, assignRes] = await Promise.all([
+        fetch(`/api/teams/${teamId}/roster`, { headers }),
+        fetch(`/api/teams/${teamId}/assignments`, { headers })
+      ]);
+      if (rosterRes.ok) setRoster(await rosterRes.json());
+      if (assignRes.ok) setAssignments(await assignRes.json());
+    } catch {} finally {
+      setRosterLoading(false);
+    }
+  }, [teamId, authToken]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const addPlayer = async (e) => {
+    e.preventDefault();
+    setRosterError("");
+    try {
+      const res = await fetch(`/api/teams/${teamId}/players`, {
+        method: "POST", headers, body: JSON.stringify(newPlayer)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to add player");
+      setRoster((prev) => [...prev, data]);
+      setNewPlayer({ name: "" });
+    } catch (err) { setRosterError(err.message); }
+  };
+
+  const removePlayer = async (playerId) => {
+    try {
+      const res = await fetch(`/api/teams/${teamId}/players/${playerId}`, {
+        method: "DELETE", headers
+      });
+      if (res.ok) {
+        setRoster((prev) => prev.filter((p) => p.id !== playerId));
+        const next = { ...assignments };
+        delete next[playerId];
+        setAssignments(next);
+        saveAssignments(next);
+      }
+    } catch {}
+  };
+
+  const saveAssignments = async (data) => {
+    try {
+      await fetch(`/api/teams/${teamId}/assignments`, {
+        method: "PUT", headers, body: JSON.stringify({ assignments: data })
+      });
+    } catch {}
+  };
+
+  const toggleGame = (playerId, game) => {
+    const playerGames = assignments[playerId] || [];
+    const next = playerGames.includes(game)
+      ? playerGames.filter((g) => g !== game)
+      : [...playerGames, game];
+    const updated = { ...assignments, [playerId]: next };
+    setAssignments(updated);
+    saveAssignments(updated);
+  };
+
+  const getPlayerCategoryCount = (playerId, category) => {
+    const playerGames = assignments[playerId] || [];
+    const catGames = GAMES_BY_CATEGORY[category] || [];
+    return playerGames.filter((g) => catGames.includes(g)).length;
+  };
+
+  const players = roster.filter((u) => u.role === "player");
+  const captain = roster.find((u) => u.role === "captain");
+
+  if (rosterLoading) return <div className="card"><p className="muted">Loading roster...</p></div>;
+
+  return (
+    <>
+      <div className="card">
+        <div className="card-header">
+          <h3>Team Roster — {teamName}</h3>
+          <p className="muted">
+            {captain ? `Captain: ${captain.name}` : ""} · {players.length} player{players.length !== 1 ? "s" : ""} registered
+          </p>
+        </div>
+
+        {rosterError && <div className="notice error">{rosterError}</div>}
+
+        <form className="roster-add-form" onSubmit={addPlayer} style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+          <label className="field" style={{ flex: 1 }}>
+            <span className="field-label">Player Name</span>
+            <input className="input" value={newPlayer.name}
+              onChange={(e) => setNewPlayer({ name: e.target.value })}
+              placeholder="Enter player name" />
+          </label>
+          <button type="submit" className="btn primary">Add</button>
+        </form>
+      </div>
+
+      {players.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h3>Game Assignments</h3>
+            <p className="muted">Assign players to games. Min 2 games per category per player.</p>
+          </div>
+
+          <div className="assign-players-list">
+            {players.map((player) => {
+              const playerGames = assignments[player.id] || [];
+              return (
+                <div key={player.id} className="assign-player-card">
+                  <div className="assign-player-header">
+                    <strong>{player.name}</strong>
+                    <button type="button" className="btn-icon-delete" title="Remove player"
+                      onClick={() => removePlayer(player.id)}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="assign-categories">
+                    {CATEGORIES.map((cat) => {
+                      const count = getPlayerCategoryCount(player.id, cat);
+                      const isLow = count < 2;
+                      return (
+                        <div key={cat} className="assign-category-block">
+                          <div className="assign-category-header">
+                            <span className="assign-category-name">{cat}</span>
+                            <span className={`assign-count ${isLow ? "warn" : "ok"}`}>
+                              {count} selected {isLow ? "(min 2)" : ""}
+                            </span>
+                          </div>
+                          <div className="assign-game-chips">
+                            {GAMES_BY_CATEGORY[cat].map((game) => {
+                              const selected = playerGames.includes(game);
+                              return (
+                                <button
+                                  key={game}
+                                  type="button"
+                                  className={`assign-chip ${selected ? "active" : ""}`}
+                                  onClick={() => toggleGame(player.id, game)}
+                                >
+                                  {game}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function Dashboard({
   activePage,
   overallStandings,
@@ -725,8 +1087,10 @@ function Dashboard({
   teams,
   role,
   myTeam,
+  authToken,
   onResolveFixture,
-  onFinalizeSport
+  onFinalizeSport,
+  onDeleteFixture
 }) {
   const showPersonalizedFixtures = role === ROLES.CAPTAIN || role === ROLES.PLAYER;
   const teamStanding = overallStandings.find((row) => row.teamId === myTeam?.id) || null;
@@ -844,6 +1208,10 @@ function Dashboard({
                 )}
               </div>
             </section>
+
+            {role === ROLES.CAPTAIN && myTeam && (
+              <CaptainRosterPanel teamId={myTeam.id} teamName={myTeam.name} authToken={authToken} />
+            )}
           </>
         )}
 
@@ -868,7 +1236,24 @@ function Dashboard({
             { key: "points", label: "Pts" }
           ]}
         />
+
+        {role === ROLES.ADMIN && (
+          <AdminAssignmentsView teams={teams} authToken={authToken} />
+        )}
       </div>
+    );
+  }
+
+  if (activePage === "fixtures") {
+    return (
+      <FixturesPanel
+        fixtures={fixtures}
+        myFixtures={myFixtures}
+        teams={teams}
+        role={role}
+        myTeam={myTeam}
+        onDeleteFixture={onDeleteFixture}
+      />
     );
   }
 
@@ -1130,6 +1515,137 @@ function SportCategoryCard({ sport, teams, myTeam, role, onResolveFixture, onFin
   );
 }
 
+/* ── Fixtures Panel (dedicated tab) ──────────────────────── */
+
+function FixturesPanel({ fixtures, myFixtures, teams, role, myTeam, onDeleteFixture }) {
+  const isAdmin = role === ROLES.ADMIN;
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [teamFilter, setTeamFilter] = useState("all");
+
+  const isPublic = !role;
+  const displayFixtures = isAdmin || isPublic ? fixtures : myFixtures;
+
+  const filtered = useMemo(() => {
+    let result = displayFixtures;
+    if (categoryFilter !== "all") {
+      result = result.filter((f) => f.category === categoryFilter);
+    }
+    if (teamFilter !== "all") {
+      result = result.filter(
+        (f) => f.teamAId === teamFilter || f.teamBId === teamFilter
+      );
+    }
+    return result;
+  }, [displayFixtures, categoryFilter, teamFilter]);
+
+  const categories = [...new Set(fixtures.map((f) => f.category))].sort();
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h2>{isAdmin ? "All Fixtures" : isPublic ? "Upcoming Fixtures" : "My Upcoming Fixtures"}</h2>
+        <p className="muted">
+          {isAdmin || isPublic
+            ? `${displayFixtures.length} fixture${displayFixtures.length !== 1 ? "s" : ""} scheduled.`
+            : `Showing upcoming matches for ${myTeam?.name || "your team"}.`}
+        </p>
+      </div>
+
+      {(isAdmin || isPublic) && (
+        <div className="filter-bar">
+          <div className="filter-group">
+            <label className="filter-label">Category</label>
+            <select
+              className="select"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+            >
+              <option value="all">All Categories</option>
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+          <div className="filter-group">
+            <label className="filter-label">Team</label>
+            <select
+              className="select"
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+            >
+              <option value="all">All Teams</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="filter-group">
+            <span className="filter-count">{filtered.length} match{filtered.length !== 1 ? "es" : ""}</span>
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <p className="muted" style={{ padding: "20px 0", textAlign: "center" }}>
+          {isAdmin ? "No fixtures match the selected filters." : "No upcoming fixtures for your team."}
+        </p>
+      ) : (
+        <div className="fixtures-table-wrap">
+          <table className="table fixtures-table">
+            <thead>
+              <tr>
+                <th>Game</th>
+                <th>Category</th>
+                <th>Team A</th>
+                <th>vs</th>
+                <th>Team B</th>
+                <th>Time</th>
+                <th>Venue</th>
+                {isAdmin && <th></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((fixture) => {
+                const isMine =
+                  myTeam &&
+                  (fixture.teamAId === myTeam.id || fixture.teamBId === myTeam.id);
+                return (
+                  <tr key={fixture.id} className={isMine ? "table-row-active" : ""}>
+                    <td style={{ fontWeight: 600 }}>{fixture.game}</td>
+                    <td>
+                      <span className="fixture-category-tag">{fixture.category}</span>
+                    </td>
+                    <td>{fixture.teamA}</td>
+                    <td style={{ color: "var(--accent)", textAlign: "center", fontFamily: "var(--font-mono)" }}>VS</td>
+                    <td>{fixture.teamB}</td>
+                    <td style={{ fontFamily: "var(--font-mono)" }}>{fixture.time}</td>
+                    <td>{fixture.venue}</td>
+                    {isAdmin && (
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-icon-delete"
+                          title="Delete fixture"
+                          onClick={() => onDeleteFixture(fixture.id)}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          </svg>
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FixtureList({ fixtures, highlightTeam }) {
   const teamLabel = String(highlightTeam || "").toLowerCase();
 
@@ -1359,31 +1875,33 @@ function ChatPanel({
         ))}
       </div>
 
-      <form className="chat-input-row" onSubmit={onSend}>
-        {isAdmin && (
-          <select
-            className="select chat-target-select"
-            value={chatTarget}
-            onChange={(e) => setChatTarget(e.target.value)}
-          >
-            <option value="all">All Teams</option>
-            {teams.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.name}
-              </option>
-            ))}
-          </select>
-        )}
-        <input
-          className="input chat-input"
-          placeholder={isAdmin ? "Type announcement or team message..." : "Send a reply..."}
-          value={chatText}
-          onChange={(e) => setChatText(e.target.value)}
-        />
-        <button type="submit" className="btn primary small">
-          Send
-        </button>
-      </form>
+      {role && (
+        <form className="chat-input-row" onSubmit={onSend}>
+          {isAdmin && (
+            <select
+              className="select chat-target-select"
+              value={chatTarget}
+              onChange={(e) => setChatTarget(e.target.value)}
+            >
+              <option value="all">All Teams</option>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <input
+            className="input chat-input"
+            placeholder={isAdmin ? "Type announcement or team message..." : "Send a reply..."}
+            value={chatText}
+            onChange={(e) => setChatText(e.target.value)}
+          />
+          <button type="submit" className="btn primary small">
+            Send
+          </button>
+        </form>
+      )}
     </div>
   );
 }
@@ -1408,6 +1926,291 @@ function ScoreActivityFeed({ updates }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/* ── Live Stream: Admin broadcaster ──────────────────────── */
+
+function LiveStreamAdmin({ socketRef, authToken, isStreaming, setIsStreaming, setIsStreamActive }) {
+  const videoRef = useRef(null);
+  const recorderRef = useRef(null);
+  const streamRef = useRef(null);
+  const [devices, setDevices] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState("");
+  const [streamError, setStreamError] = useState("");
+
+  useEffect(() => {
+    navigator.mediaDevices.enumerateDevices().then((allDevices) => {
+      const videoDevices = allDevices.filter((d) => d.kind === "videoinput");
+      setDevices(videoDevices);
+      if (videoDevices.length && !selectedDevice) {
+        setSelectedDevice(videoDevices[0].deviceId);
+      }
+    }).catch(() => {});
+  }, []);
+
+  const startStreaming = useCallback(async () => {
+    setStreamError("");
+    try {
+      const constraints = {
+        video: selectedDevice ? { deviceId: { exact: selectedDevice } } : true,
+        audio: true
+      };
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = mediaStream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
+
+      const mimeType = MediaRecorder.isTypeSupported("video/webm; codecs=vp8,opus")
+        ? "video/webm; codecs=vp8,opus"
+        : "video/webm";
+
+      const recorder = new MediaRecorder(mediaStream, {
+        mimeType,
+        videoBitsPerSecond: 800000
+      });
+      recorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0 && socketRef.current) {
+          e.data.arrayBuffer().then((buf) => {
+            socketRef.current.emit("stream:chunk", buf);
+          });
+        }
+      };
+
+      recorder.start(1000);
+      socketRef.current?.emit("stream:start", { token: authToken });
+      setIsStreaming(true);
+      setIsStreamActive(true);
+    } catch (err) {
+      setStreamError(
+        err.name === "NotAllowedError"
+          ? "Camera permission denied. Please allow camera access."
+          : err.name === "NotFoundError"
+            ? "No camera found. Is DroidCam connected?"
+            : `Failed to start stream: ${err.message}`
+      );
+    }
+  }, [selectedDevice, authToken, socketRef, setIsStreaming, setIsStreamActive]);
+
+  const stopStreaming = useCallback(() => {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    socketRef.current?.emit("stream:stop");
+    setIsStreaming(false);
+    setIsStreamActive(false);
+    recorderRef.current = null;
+  }, [socketRef, setIsStreaming, setIsStreamActive]);
+
+  // Attach stream to video element whenever isStreaming becomes true
+  useEffect(() => {
+    if (isStreaming && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [isStreaming]);
+
+  useEffect(() => {
+    return () => {
+      // Only cleanup if still streaming (streamRef is nulled in stopStreaming)
+      if (!streamRef.current) return;
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.stop();
+      }
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      socketRef.current?.emit("stream:stop");
+    };
+  }, [socketRef]);
+
+  return (
+    <div className="card live-stream-card">
+      <div className="card-header">
+        <h3>
+          Live Stream Control
+          {isStreaming && <span className="live-badge">LIVE</span>}
+        </h3>
+        <p className="muted">Broadcast your camera feed to all viewers.</p>
+      </div>
+
+      {streamError && <p className="notice error">{streamError}</p>}
+
+      {isStreaming && (
+        <video
+          ref={videoRef}
+          className="live-stream-video"
+          autoPlay
+          playsInline
+          muted
+        />
+      )}
+
+      <div className="stream-controls">
+        {!isStreaming && devices.length > 1 && (
+          <select
+            className="field-input"
+            value={selectedDevice}
+            onChange={(e) => setSelectedDevice(e.target.value)}
+          >
+            {devices.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Camera ${devices.indexOf(d) + 1}`}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {!isStreaming ? (
+          <button type="button" className="btn primary" onClick={startStreaming}>
+            Start Streaming
+          </button>
+        ) : (
+          <button type="button" className="btn btn-danger" onClick={stopStreaming}>
+            Stop Streaming
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Live Stream: Viewer ─────────────────────────────────── */
+
+function LiveStreamViewer({ socketRef }) {
+  const videoRef = useRef(null);
+  const mediaSourceRef = useRef(null);
+  const sourceBufferRef = useRef(null);
+  const chunkQueueRef = useRef([]);
+  const blobUrlRef = useRef(null);
+  const [ended, setEnded] = useState(false);
+  const [viewError, setViewError] = useState("");
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+
+    setEnded(false);
+    setViewError("");
+
+    const supportsMediaSource = typeof MediaSource !== "undefined";
+
+    if (supportsMediaSource) {
+      const mediaSource = new MediaSource();
+      mediaSourceRef.current = mediaSource;
+      const url = URL.createObjectURL(mediaSource);
+      blobUrlRef.current = url;
+      if (videoRef.current) {
+        videoRef.current.src = url;
+      }
+
+      mediaSource.addEventListener("sourceopen", () => {
+        try {
+          const mimeType = MediaRecorder.isTypeSupported("video/webm; codecs=vp8,opus")
+            ? "video/webm; codecs=vp8,opus"
+            : "video/webm";
+          const sb = mediaSource.addSourceBuffer(mimeType);
+          sourceBufferRef.current = sb;
+
+          sb.addEventListener("updateend", () => {
+            // Drain queued chunks
+            if (chunkQueueRef.current.length > 0 && !sb.updating) {
+              const next = chunkQueueRef.current.shift();
+              try { sb.appendBuffer(next); } catch {}
+            }
+            // Cleanup old buffer to prevent memory growth
+            try {
+              const video = videoRef.current;
+              if (video && sb.buffered.length > 0 && video.currentTime > 30) {
+                sb.remove(0, video.currentTime - 30);
+              }
+            } catch {}
+          });
+        } catch {
+          setViewError("Failed to initialize stream playback.");
+        }
+      });
+
+      mediaSource.addEventListener("error", () => {
+        setViewError("Stream playback error occurred.");
+      });
+    } else {
+      setViewError("Your browser does not support live stream playback.");
+    }
+
+    const handleChunk = (data) => {
+      if (!supportsMediaSource) return;
+      const uint8 = new Uint8Array(data);
+      const sb = sourceBufferRef.current;
+      if (sb && !sb.updating) {
+        try { sb.appendBuffer(uint8); } catch {}
+      } else {
+        chunkQueueRef.current.push(uint8);
+        // Cap queue to prevent unbounded growth
+        if (chunkQueueRef.current.length > 60) {
+          chunkQueueRef.current = chunkQueueRef.current.slice(-30);
+        }
+      }
+    };
+
+    const handleStopped = () => {
+      setEnded(true);
+      if (mediaSourceRef.current && mediaSourceRef.current.readyState === "open") {
+        try { mediaSourceRef.current.endOfStream(); } catch {}
+      }
+    };
+
+    socket.on("stream:chunk", handleChunk);
+    socket.on("stream:stopped", handleStopped);
+
+    return () => {
+      socket.off("stream:chunk", handleChunk);
+      socket.off("stream:stopped", handleStopped);
+      chunkQueueRef.current = [];
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.src = "";
+      }
+      mediaSourceRef.current = null;
+      sourceBufferRef.current = null;
+    };
+  }, [socketRef]);
+
+  return (
+    <div className="card live-stream-card">
+      <div className="card-header">
+        <h3>
+          Live Stream
+          {!ended && <span className="live-badge">LIVE</span>}
+        </h3>
+      </div>
+      {viewError && <p className="notice error">{viewError}</p>}
+      {ended ? (
+        <p className="muted" style={{ textAlign: "center", padding: "2rem 0" }}>
+          Stream has ended.
+        </p>
+      ) : (
+        <video
+          ref={videoRef}
+          className="live-stream-video"
+          autoPlay
+          playsInline
+          muted
+          controls
+        />
+      )}
     </div>
   );
 }
