@@ -1908,24 +1908,53 @@ function ChatPanel({
 }
 
 function ScoreActivityFeed({ updates }) {
+  const formatResult = (update) => {
+    const result = update.result || "";
+    const isFinalized = result.includes("finalized:");
+
+    if (isFinalized) {
+      // "Cricket finalized: 1st Team A, 2nd Team B, 3rd Team C"
+      const parts = result.split("finalized:")[1]?.trim() || "";
+      return { type: "finalized", summary: parts };
+    }
+
+    // "Team A beat Team B" or "Team A drew with Team B"
+    if (result.includes(" beat ")) {
+      const [winner] = result.split(" beat ");
+      const shortWinner = winner.replace(/\s*\(.*?\)/g, "");
+      return { type: "win", summary: `${shortWinner} wins` };
+    }
+    if (result.includes(" drew with ")) {
+      return { type: "draw", summary: "Draw" };
+    }
+    return { type: "other", summary: result };
+  };
+
+  const shortTeams = (teamName) =>
+    (teamName || "").replace(/\s*\(.*?\)/g, "").replace(" vs ", " vs ");
+
   return (
     <div className="card">
       <div className="card-header">
         <h3>Results Feed</h3>
-        <p className="muted">Recent match outcomes resolved from the admin panel.</p>
+        <p className="muted">Latest match outcomes.</p>
       </div>
       {updates.length === 0 && <p className="muted small">No match results recorded yet.</p>}
       <ul className="activity-list">
-        {updates.map((update) => (
-          <li key={update.id} className="activity-item">
-            <span className="activity-team">
-              {update.game ? `${update.game}: ` : ""}
-              {update.teamName}
-            </span>
-            <span className="activity-change">{update.result || "Result updated"}</span>
-            <span className="activity-time">{update.time}</span>
-          </li>
-        ))}
+        {updates.map((update) => {
+          const { type, summary } = formatResult(update);
+          const isFinalized = type === "finalized";
+          return (
+            <li key={update.id} className={`activity-card ${isFinalized ? "finalized" : ""}`}>
+              <div className="activity-card-top">
+                <span className="activity-game">{update.game || "Match"}</span>
+                <span className="activity-time">{update.time}</span>
+              </div>
+              <div className="activity-matchup">{shortTeams(update.teamName)}</div>
+              <div className={`activity-result ${type}`}>{summary}</div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
