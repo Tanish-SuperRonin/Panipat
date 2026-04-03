@@ -38,7 +38,7 @@ const SPORT_CATALOG = [
   {
     category: "LAN Games",
     subcategory: "GC",
-    games: ["Subway Surfers", "Temple Run", "Fruit Ninja", "Dino Game"]
+    games: ["GC"]
   },
   {
     category: "Indoor Games",
@@ -1189,7 +1189,7 @@ function Dashboard({
           <div>
             <h3 className="section-title">Main Standings</h3>
             <p className="muted">
-              Only finalized sports affect this table. First place earns 5 points and second place earns 3 points.
+              Only finalized sports affect this table. 1st place = 5 pts, 2nd = 3 pts, 3rd = 1 pt.
             </p>
           </div>
           <span className="score-rank">{finalizedSportCount} Sports Finalized</span>
@@ -1803,10 +1803,20 @@ function AdminFixtureForm({ teams, newFixture, setNewFixture, onAddFixture }) {
   );
 }
 
-// Day-1 cutoff: updates created before 2026-04-03 midnight IST are Day-1
-const DAY2_CUTOFF = new Date("2026-04-03T00:00:00+05:30").getTime();
+// Day boundaries (midnight IST)
+const DAY_BOUNDARIES = [
+  { label: "Day 1", cutoff: 0, image: "/Day-1-standings.png" },
+  { label: "Day 2", cutoff: new Date("2026-04-03T00:00:00+05:30").getTime(), image: null },
+  { label: "Day 3", cutoff: new Date("2026-04-04T00:00:00+05:30").getTime(), image: null },
+];
+
+function getUpdateTimestamp(update) {
+  return parseInt(String(update.id).split("-")[0], 10) || 0;
+}
 
 function ScoreActivityFeed({ updates }) {
+  const [activeDay, setActiveDay] = useState(null);
+
   const formatResult = (update) => {
     const result = update.result || "";
     const isFinalized = result.includes("finalized:");
@@ -1830,48 +1840,76 @@ function ScoreActivityFeed({ updates }) {
   const shortTeams = (teamName) =>
     (teamName || "").replace(/\s*\(.*?\)/g, "").replace(" vs ", " vs ");
 
-  // Split updates into Day-2 (new, shown as text) and Day-1 (old, shown as image)
-  const day2Updates = updates.filter((u) => {
-    const ts = parseInt(String(u.id).split("-")[0], 10);
-    return !isNaN(ts) && ts >= DAY2_CUTOFF;
-  });
-  const hasDay1 = updates.length > day2Updates.length;
+  // Group updates by day
+  const dayGroups = useMemo(() => {
+    const groups = [];
+    for (let i = DAY_BOUNDARIES.length - 1; i >= 0; i--) {
+      const day = DAY_BOUNDARIES[i];
+      const nextCutoff = i < DAY_BOUNDARIES.length - 1 ? DAY_BOUNDARIES[i + 1].cutoff : Infinity;
+      const dayUpdates = updates.filter((u) => {
+        const ts = getUpdateTimestamp(u);
+        return ts >= day.cutoff && ts < nextCutoff;
+      });
+      if (dayUpdates.length > 0) {
+        groups.push({ ...day, updates: dayUpdates });
+      }
+    }
+    return groups;
+  }, [updates]);
+
+  // Auto-select latest day with updates
+  const selectedDay = activeDay ?? (dayGroups.length > 0 ? dayGroups[0].label : null);
+  const currentGroup = dayGroups.find((g) => g.label === selectedDay);
 
   return (
     <div className="card">
       <div className="card-header">
         <h3>Results Feed</h3>
-        <p className="muted">Latest match outcomes.</p>
+        <p className="muted">Match outcomes by day.</p>
       </div>
 
-      {day2Updates.length === 0 && !hasDay1 && (
+      {dayGroups.length === 0 && (
         <p className="muted small">No match results recorded yet.</p>
       )}
 
-      {day2Updates.length > 0 && (
-        <ul className="activity-list">
-          {day2Updates.map((update) => {
-            const { type, summary } = formatResult(update);
-            const isFinalized = type === "finalized";
-            return (
-              <li key={update.id} className={`activity-card ${isFinalized ? "finalized" : ""}`}>
-                <div className="activity-card-top">
-                  <span className="activity-game">{update.game || "Match"}</span>
-                  <span className="activity-time">{update.time}</span>
-                </div>
-                <div className="activity-matchup">{shortTeams(update.teamName)}</div>
-                <div className={`activity-result ${type}`}>{summary}</div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {dayGroups.length > 0 && (
+        <>
+          <div className="day-tabs">
+            {dayGroups.map((group) => (
+              <button
+                key={group.label}
+                type="button"
+                className={`btn ${selectedDay === group.label ? "primary" : "btn-ghost"} small`}
+                onClick={() => setActiveDay(group.label)}
+              >
+                {group.label}
+                <span className="day-tab-count">{group.updates.length}</span>
+              </button>
+            ))}
+          </div>
 
-      {hasDay1 && (
-        <div className="day1-summary">
-          <p className="day1-label">Day 1 Results</p>
-          <img src="/Day-1-standings.png" alt="Day 1 Standings" className="day1-image" />
-        </div>
+          {currentGroup && currentGroup.image ? (
+            <div className="day1-summary">
+              <img src={currentGroup.image} alt={`${currentGroup.label} Standings`} className="day1-image" />
+            </div>
+          ) : currentGroup ? (
+            <ul className="activity-list">
+              {currentGroup.updates.map((update) => {
+                const { type, summary } = formatResult(update);
+                const isFinalized = type === "finalized";
+                return (
+                  <li key={update.id} className={`activity-card ${isFinalized ? "finalized" : ""}`}>
+                    <div className="activity-card-top">
+                      <span className="activity-game">{update.game || "Match"}</span>
+                    </div>
+                    <div className="activity-matchup">{shortTeams(update.teamName)}</div>
+                    <div className={`activity-result ${type}`}>{summary}</div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </>
       )}
     </div>
   );
