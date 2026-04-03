@@ -23,7 +23,9 @@ body {
   min-height: 100vh;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
     "Segoe UI", sans-serif;
-  background: radial-gradient(circle at top, #1e293b 0, var(--bg) 45%);
+  background:
+    linear-gradient(180deg, rgba(5, 8, 22, 0.82) 0%, rgba(5, 8, 22, 0.92) 40%, rgba(5, 8, 22, 0.97) 100%),
+    url("/bg.png") center top / cover no-repeat fixed;
   color: var(--text);
 }
 
@@ -1185,6 +1187,28 @@ body {
   .roster-add-form {
     flex-direction: column !important;
   }
+}
+
+/* ── Day 1 Summary ───────────────────────────────────────── */
+
+.day1-summary {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.day1-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+.day1-image {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 /* ── Live Stream ─────────────────────────────────────────── */

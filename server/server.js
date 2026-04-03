@@ -45,6 +45,11 @@ const SPORT_CATALOG = [
     games: ["BGMI", "Free Fire", "Mini Militia"]
   },
   {
+    category: "LAN Games",
+    subcategory: "GC",
+    games: ["Subway Surfers", "Temple Run", "Fruit Ninja", "Dino Game"]
+  },
+  {
     category: "Indoor Games",
     subcategory: "",
     games: ["Table Tennis", "Carrom", "Chess"]

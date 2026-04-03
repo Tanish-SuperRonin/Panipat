@@ -36,6 +36,11 @@ const SPORT_CATALOG = [
     games: ["BGMI", "Free Fire", "Mini Militia"]
   },
   {
+    category: "LAN Games",
+    subcategory: "GC",
+    games: ["Subway Surfers", "Temple Run", "Fruit Ninja", "Dino Game"]
+  },
+  {
     category: "Indoor Games",
     subcategory: "",
     games: ["Table Tennis", "Carrom", "Chess"]
@@ -1907,18 +1912,19 @@ function ChatPanel({
   );
 }
 
+// Day-1 cutoff: updates created before 2026-04-03 midnight IST are Day-1
+const DAY2_CUTOFF = new Date("2026-04-03T00:00:00+05:30").getTime();
+
 function ScoreActivityFeed({ updates }) {
   const formatResult = (update) => {
     const result = update.result || "";
     const isFinalized = result.includes("finalized:");
 
     if (isFinalized) {
-      // "Cricket finalized: 1st Team A, 2nd Team B, 3rd Team C"
       const parts = result.split("finalized:")[1]?.trim() || "";
       return { type: "finalized", summary: parts };
     }
 
-    // "Team A beat Team B" or "Team A drew with Team B"
     if (result.includes(" beat ")) {
       const [winner] = result.split(" beat ");
       const shortWinner = winner.replace(/\s*\(.*?\)/g, "");
@@ -1933,29 +1939,49 @@ function ScoreActivityFeed({ updates }) {
   const shortTeams = (teamName) =>
     (teamName || "").replace(/\s*\(.*?\)/g, "").replace(" vs ", " vs ");
 
+  // Split updates into Day-2 (new, shown as text) and Day-1 (old, shown as image)
+  const day2Updates = updates.filter((u) => {
+    const ts = parseInt(String(u.id).split("-")[0], 10);
+    return !isNaN(ts) && ts >= DAY2_CUTOFF;
+  });
+  const hasDay1 = updates.length > day2Updates.length;
+
   return (
     <div className="card">
       <div className="card-header">
         <h3>Results Feed</h3>
         <p className="muted">Latest match outcomes.</p>
       </div>
-      {updates.length === 0 && <p className="muted small">No match results recorded yet.</p>}
-      <ul className="activity-list">
-        {updates.map((update) => {
-          const { type, summary } = formatResult(update);
-          const isFinalized = type === "finalized";
-          return (
-            <li key={update.id} className={`activity-card ${isFinalized ? "finalized" : ""}`}>
-              <div className="activity-card-top">
-                <span className="activity-game">{update.game || "Match"}</span>
-                <span className="activity-time">{update.time}</span>
-              </div>
-              <div className="activity-matchup">{shortTeams(update.teamName)}</div>
-              <div className={`activity-result ${type}`}>{summary}</div>
-            </li>
-          );
-        })}
-      </ul>
+
+      {day2Updates.length === 0 && !hasDay1 && (
+        <p className="muted small">No match results recorded yet.</p>
+      )}
+
+      {day2Updates.length > 0 && (
+        <ul className="activity-list">
+          {day2Updates.map((update) => {
+            const { type, summary } = formatResult(update);
+            const isFinalized = type === "finalized";
+            return (
+              <li key={update.id} className={`activity-card ${isFinalized ? "finalized" : ""}`}>
+                <div className="activity-card-top">
+                  <span className="activity-game">{update.game || "Match"}</span>
+                  <span className="activity-time">{update.time}</span>
+                </div>
+                <div className="activity-matchup">{shortTeams(update.teamName)}</div>
+                <div className={`activity-result ${type}`}>{summary}</div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {hasDay1 && (
+        <div className="day1-summary">
+          <p className="day1-label">Day 1 Results</p>
+          <img src="/Day-1-standings.png" alt="Day 1 Standings" className="day1-image" />
+        </div>
+      )}
     </div>
   );
 }
