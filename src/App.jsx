@@ -142,8 +142,6 @@ function App() {
   const [newFixture, setNewFixture] = useState(defaultFixtureForm);
   const [scoreUpdates, setScoreUpdates] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
-  const [chatTarget, setChatTarget] = useState("all");
-  const [chatText, setChatText] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [globalError, setGlobalError] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -196,14 +194,6 @@ function App() {
       (fixture) => fixture.teamAId === myTeam.id || fixture.teamBId === myTeam.id
     );
   }, [fixtures, myTeam]);
-
-  const visibleMessages = useMemo(() => {
-    if (!user) return [];
-    if (role === ROLES.ADMIN) return chatMessages;
-    return chatMessages.filter(
-      (message) => message.target === "all" || message.target === user.teamId
-    );
-  }, [chatMessages, role, user]);
 
   useEffect(() => {
     let isMounted = true;
@@ -475,22 +465,6 @@ function App() {
     }
   }
 
-  async function handleSendChat(e) {
-    e.preventDefault();
-    if (!chatText.trim()) return;
-
-    try {
-      await postWithAuth("/api/messages", {
-        target: role === ROLES.ADMIN ? chatTarget : "all",
-        text: chatText.trim()
-      });
-      setChatText("");
-      setGlobalError("");
-    } catch (error) {
-      setGlobalError(error.message);
-    }
-  }
-
   if (authLoading) {
     return (
       <div className="auth-shell">
@@ -609,16 +583,6 @@ function App() {
         </section>
 
         <aside className="side-panel">
-          <ChatPanel
-            role={role}
-            teams={teams}
-            chatTarget={chatTarget}
-            setChatTarget={setChatTarget}
-            chatText={chatText}
-            setChatText={setChatText}
-            messages={visibleMessages}
-            onSend={handleSendChat}
-          />
           <ScoreActivityFeed updates={scoreUpdates} />
         </aside>
       </main>
@@ -1835,79 +1799,6 @@ function AdminFixtureForm({ teams, newFixture, setNewFixture, onAddFixture }) {
           </button>
         </div>
       </form>
-    </div>
-  );
-}
-
-function ChatPanel({
-  role,
-  teams,
-  chatTarget,
-  setChatTarget,
-  chatText,
-  setChatText,
-  messages,
-  onSend
-}) {
-  const isAdmin = role === ROLES.ADMIN;
-
-  return (
-    <div className="card chat-card">
-      <div className="card-header">
-        <h3>Event Chat</h3>
-        <p className="muted">
-          {isAdmin
-            ? "Broadcast to all teams or message a single team."
-            : "Official event updates shared with your team."}
-        </p>
-      </div>
-
-      <div className="chat-messages">
-        {messages.length === 0 && <p className="muted small">No messages yet.</p>}
-        {messages.map((message) => (
-          <div key={message.id} className="chat-message">
-            <div className="chat-meta">
-              <span className="chat-from">{message.from}</span>
-              <span className="chat-role">{message.role}</span>
-              <span className="chat-time">{message.time}</span>
-            </div>
-            {message.target !== "all" && (
-              <div className="chat-target">
-                To: <strong>{message.targetLabel}</strong>
-              </div>
-            )}
-            <div className="chat-text">{message.text}</div>
-          </div>
-        ))}
-      </div>
-
-      {role && (
-        <form className="chat-input-row" onSubmit={onSend}>
-          {isAdmin && (
-            <select
-              className="select chat-target-select"
-              value={chatTarget}
-              onChange={(e) => setChatTarget(e.target.value)}
-            >
-              <option value="all">All Teams</option>
-              {teams.map((team) => (
-                <option key={team.id} value={team.id}>
-                  {team.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <input
-            className="input chat-input"
-            placeholder={isAdmin ? "Type announcement or team message..." : "Send a reply..."}
-            value={chatText}
-            onChange={(e) => setChatText(e.target.value)}
-          />
-          <button type="submit" className="btn primary small">
-            Send
-          </button>
-        </form>
-      )}
     </div>
   );
 }
